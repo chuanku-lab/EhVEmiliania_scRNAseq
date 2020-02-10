@@ -9,7 +9,7 @@ output: html_document
 
 # Preparation: 
 ## 1. Use the folder "EhVEmiliania_scRNAseq" as your R working directory.
-## 2. Download the processed data files (UMI tables) from Gene Expression Omnibus (accession GSE135429) into a folder called "processed_data_files" within "scRNAseq".
+## 2. Download the processed data files (UMI tables) from Gene Expression Omnibus (accession GSE135429) into a folder called "processed_data_files" within "EhVEmiliania_scRNAseq".
 ## 3. Install the packages below in R.
 library(metacell) #v. 0.3.14
 library(ggplot2) #v. 3.1.0
