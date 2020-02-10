@@ -1,6 +1,6 @@
 # EhVEmiliania_scRNAseq
 
-R code and related files for generating figures in the following study.
+R code and related files for generating figures in the following study. Please follow the steps in scRNAseq.Rmd to run the code.
 
 Reference: Chuan Ku, Uri Sheyn, Arnau Sebé-Pedrós, Shifra Ben-Dor, Daniella Schatz, Amos Tanay, Shilo Rosenwasser, Assaf Vardi (2019): Tracking infection dynamics at single-cell level reveals highly-resolved expression programs of a large virus infecting algal blooms. bioRxiv. DOI:10.1101/757542
 
