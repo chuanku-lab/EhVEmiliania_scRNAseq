@@ -1,0 +1,50 @@
+AET97963.1	lipids
+AET97962.1	lipids
+AET97919.1	lipids
+AET98124.1	lipids
+AET98108.1	lipids
+AET98073.1	lipids
+AET97954.1	lipids
+AET97916.1	lipids
+AET97936.1	lipids
+AET97965.1	lipids
+AET97947.1	lipids
+AET97902.1	lipids
+AET98329.1	protease
+AET98286.1	protease
+AET98071.1	protease
+AET98060.1	protease
+AET98016.1	protease
+AET97995.1	protease
+AET97909.1	protease
+AET98273.1	DNA replication
+AET98290.1	DNA replication
+AET97918.1	DNA replication
+AET98150.1	DNA replication
+AET97908.1	DNA replication
+AET98319.1	helicase
+AET97993.1	helicase
+AET97990.1	helicase
+AET97944.1	helicase
+AET97999.1	nucleotide
+AET98105.1	nucleotide
+AET98138.1	nucleotide
+AET97913.1	nucleotide
+AET97911.1	nucleotide
+AET98316.1	endonuclease
+AET98183.1	endonuclease
+AET98109.1	endonuclease
+AET97978.1	endonuclease
+AET97972.1	endonuclease
+AET97928.1	endonuclease
+AET97906.1	endonuclease
+AET97889.1	endonuclease
+AET98309.1	RNA polymerase
+AET98274.1	RNA polymerase
+AET98144.1	RNA polymerase
+AET98107.1	RNA polymerase
+AET97994.1	RNA polymerase
+AET97950.1	RNA polymerase
+AET98111.1	transcription factor
+AET98148.1	transcription factor
+AET97991.1	transcription factor

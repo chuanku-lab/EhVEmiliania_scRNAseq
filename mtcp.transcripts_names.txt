@@ -1,0 +1,21 @@
+transcripts	names_this_study	organelle	genes_encoded
+comp90416_c0	rpl16-nad4L-nad2	mt	rpl16, nad4L, nad2
+comp87234_c0	nad3-cox2	mt	nad3, cox2, trnL/C/T/H/R
+comp87690_c0	cob	mt	cob
+comp88506_c0	atp9-nad1-rps14-nad6	mt	atp9, trnK, nad1, rps14, trnN/F/M, nad6, trnI
+comp92089_c0	cox3-rps3-nad4	mt	cox3, trnG/D, rps3, nad4
+comp92163_c0	cox1-atp4_6-orf104-nad5	mt	cox1, trnP, atp4, atp6, orf104, trnM/L/W/Y, nad5
+comp92395_c0	rpl2_23-rps3_19-secY	cp	rpl3, rpl23, rpl2, rps19, rpl22, rps3, rpl16, rps17, rpl14, rpl5, rps8, rpl6, rps5, secY, rpl36, rps13, rps11
+comp52235_c0	psbEFLJ	cp	psbE, psbF, psbL, psbJ
+comp82468_c0	rbcLS	cp	rbcL, rbcS
+comp92417_c2	psbH-psaFJL-petL-rpoBC-rps4	cp	psbH, trnL, ycf44, psaF, psaJ, ycf55, trnP, psaL, petL, ycf4, ycf27, rpoB, rpoC1, rpoC2, rps4
+comp92410_c1	psbK-atpBE	cp	trnG, trnN, psbK, atpB, atpE
+comp91862_c0	petBD-psaAB	cp	petB, petD, psaA, psaB
+comp92370_c0	rpoA-rps7_12-rpl31-tufA	cp	rpoA, rps9, rpl31, rps12, rps7, tufA, rps10
+comp89702_c0	psbBT	cp	psbB, psbT
+comp92410_c0_rev	ycf35_43-groEl-petA	cp	ycf12, ycf35, trnM, groEl, ycf43, petA
+comp92186_c0_rev	psaD-psbV-orf132	cp	psaD, psbV, orf132
+comp92389_c0_rev	cbbx-petG-orf46-dfr	cp	cbbx, petG, orf46, dfr
+comp17003280_c0_rev	thiG-chll-ycf3_80-psbDC	cp	orf36, thiG, chll, ycf80, trnL/M, ycf3, psbD, psbC, trnS
+comp92410_c0	ycf45-orf35-clpC	cp	ycf45, orf35, clpC
+comp92315_c0	ycf19_60-rpl19-psbI	cp	trnT, ycf19, ycf24, ycf46, rpl19, ycf60, psbI

@@ -1,0 +1,711 @@
+---
+title: "scRNAseq"
+output: html_document
+---
+
+## 0. Setup
+```{r setup, include=FALSE}
+# R version 3.5.1
+
+# Preparation: 
+## 1. Use the folder "EhVEmiliania_scRNAseq" as your R working directory.
+## 2. Download the processed data files (UMI tables) from Gene Expression Omnibus (accession GSE135429) into a folder called "processed_data_files" within "scRNAseq".
+## 3. Install the packages below in R.
+library(metacell) #v. 0.3.14
+library(ggplot2) #v. 3.1.0
+library(reshape2) #v. 1.4.3
+library(gridExtra) #v. 2.3
+library(pheatmap) #v. 1.0.12
+library(ape) #v. 5.2
+library(zoo) #v. 1.8-4
+
+## Working directory
+work_dir <- getwd()
+
+## Lists of wells (table S1)
+wells_control = as.character(read.table(paste(work_dir,"/WellLists/controlWells.txt", sep = ""))[,1]) # control wells where no cell was sorted
+hpi8_infonly = as.character(read.table(paste(work_dir,"/WellLists/8hpi_infonly.txt", sep = ""))[,1]) # wells each with one cell from infected culture in the 8hpi plate
+hpi8_mixed = as.character(read.table(paste(work_dir,"/WellLists/8hpi_mixed.txt", sep = ""))[,1]) # wells each with one cell from infected culture and one from control culture in the 8hpi plate
+hpi8_ctrlonly = as.character(read.table(paste(work_dir,"/WellLists/8hpi_ctrlonly.txt", sep = ""))[,1]) # wells each with one cell from control culture in the 8hpi plate
+## Viral gene functional categories (Fig. 3C)
+virusGeneCategories = read.table(paste(work_dir,"/ViralGeneFunctions.txt", sep = ""), sep = "\t", row.names = 1); virusGeneCategories[,1] <- as.character(virusGeneCategories[,1])
+## Viral protein-encoding genes that have 10 peptide-spetrum matches in the virion proteomic data (table S3; Fig. 3C)
+proteome = read.table(paste(work_dir,"/VirionProteome.txt", sep = ""), row.names = 1) 
+## Transcripts encoded by the chloroplast (cp) and mitochondrial (mt) genomes
+cp_transcripts <- read.table(paste(work_dir,"/cp_transcripts.txt", sep = ""), sep = "\n")
+mt_transcripts <- read.table(paste(work_dir,"/mt_transcripts.txt", sep = ""), sep = "\n")
+```
+
+
+## 1. Infection dynamics (abundance of cells and virus-like particles through time): fig. S1
+```{r }
+# Read in counts
+virusnum <- read.csv(paste(work_dir,"/FCcounts_rawdata/VLPcounts.csv", sep = "")); virusnum = virusnum[,c(1,4:6)]; colnames(virusnum) = c("hpi", "Control", "Infected", "Infected_SD")
+cellnum <- read.csv(paste(work_dir,"/FCcounts_rawdata/cellcounts.csv", sep = "")); cellnum = cellnum[,c(1,4:6)]; colnames(cellnum) = c("hpi", "Control", "Infected", "Infected_SD")
+
+# Plot cell counts (fig. S1A)
+pdf(file=paste(work_dir,"/fig.S1A.pdf", sep = ""), width = 3, height = 3, useDingbats = FALSE)
+ggplot(cellnum) + geom_point(aes(x = hpi, y = Control), color='blue', size = 1, shape = 17) + geom_smooth(aes(x = hpi, y = Control), method = "loess", se = FALSE, span = 1, linetype=3,color='blue', size = 0.5) + geom_errorbar(aes(x = hpi, ymin = Infected-Infected_SD, ymax=Infected+Infected_SD), width=2, color='red', alpha = 0.5) + geom_point(aes(x = hpi, y = Infected), color='red', size = 1) + geom_smooth(aes(x = hpi, y = Infected), method = "loess", se = FALSE, span =1, linetype=3,color='red', size = 0.5) + labs(y = "Cells", x = "Hours post infection") + theme(axis.title.x = element_text(size=8), axis.text.x = element_text(size=8), axis.title.y = element_text(size=8), axis.text.y = element_text(size=8))
+dev.off()
+
+# Plot counts of virus-like particles (fig. S1B)
+pdf(file=paste(work_dir,"/fig.S1B.pdf", sep = ""), width = 3, height = 3, useDingbats = FALSE)
+ggplot(virusnum) + geom_point(aes(x = hpi, y = Control), color='blue', size = 1, shape = 17) + geom_smooth(aes(x = hpi, y = Control), method = "loess", se = FALSE, span = 1, linetype=3,color='blue', size = 0.5) + geom_errorbar(aes(x = hpi, ymin = Infected-Infected_SD, ymax=Infected+Infected_SD), width=2, color='red', alpha = 0.5) + geom_point(aes(x = hpi, y = Infected), color='red', size = 1) + geom_smooth(aes(x = hpi, y = Infected), method = "loess", se = FALSE, span =1, linetype=3,color='red', size = 0.5) + labs(y = "Virus-like particles", x = "Hours post infection") + theme(axis.title.x = element_text(size=8), axis.text.x = element_text(size=8), axis.title.y = element_text(size=8), axis.text.y = element_text(size=8))
+dev.off()
+
+```
+
+
+## 2. Total viral gene expression levels across single cells: Fig. 1B and 1C
+```{r }
+# Prepare for metacell package
+detach("package:metacell", unload = T) # make sure nothing is already loaded
+library(metacell)
+
+# Prepare a directory
+dir.create(paste(work_dir,"/metacell/", sep = ""))
+scdb_init(paste(work_dir,"/metacell/", sep = ""), force_reinit=T)
+## read in UMI tables
+mcell_import_multi_mars("mat", dataset_table_fn = paste(work_dir,"/MARS_Batches.txt", sep = ""), base_dir = paste(work_dir,"/processed_data_files", sep = ""), force = TRUE)
+mat = scdb_mat("mat")
+print(dim(mat@mat)) # check dimensions: 93429  5376
+
+
+# viral gene expression per cell across time points (Fig. 1B)
+## Prepare a matrix with only viral UMIs
+ercc_host=rownames(mat@mat)[grepl("ERCC|comp",rownames(mat@mat))]
+mcell_mat_ignore_genes(new_mat_id="vir",mat_id="mat",ig_genes=ercc_host)
+
+## Exclude wells that have fewer than 10 non-ERCC UMIs (ERCC RNA was added as spike-in controls)
+ERCC=rownames(mat@mat)[grepl("ERCC",rownames(mat@mat))]
+mcell_mat_ignore_genes(new_mat_id="hostvir",mat_id="mat",ig_genes=ERCC)
+x=colSums(as.matrix(scdb_mat("hostvir")@mat))
+sum(x<10) # 187 wells have fewer than 10 non-ERCC UMIs
+small_cells=names(which(x<10)) # IDs of these wells
+mcell_mat_ignore_cells(new_mat_id="vir_2",mat_id="vir",ig_cells=small_cells) # Exclude these wells 
+
+## Prepare the dataset for plotting overall viral expression across cells
+dat <- as.data.frame(as.matrix(scdb_mat("vir_2")@mat))
+dat["Viral UMIs",] <- colSums(dat); dat["Cell",] <- colnames(dat)
+dat.m <- melt(as.data.frame(t(dat[c("Viral UMIs","Cell"),])), id.vars = "Cell", measure.vars = c("Viral UMIs"), variable.name = "Category")
+dat.m$hpi <- as.factor("") # add a column for sample/treatment
+dat.m$value <- as.numeric(dat.m$value)
+levels(dat.m$hpi) <- c("Ctrl", "UV", "0","1","1.5","2","4","4.5","6","8","9.5","24") 
+a <- colnames(dat)
+dat.m[which(dat.m$Cell %in% grep("WCK0017|WCK5060",colnames(dat) ,value = TRUE) ),"hpi"] <- "Ctrl" # without any viral lysate 
+dat.m[which(dat.m$Cell %in% grep("WCK4033|WCK4036",colnames(dat) ,value = TRUE) ),"hpi"] <- "UV" # mock infection with UV-treated viral lysate
+dat.m[which(dat.m$Cell %in% grep("WCK1001",colnames(dat) ,value = TRUE) ),"hpi"] <- "0"
+dat.m[which(dat.m$Cell %in% grep("WCK5026",colnames(dat) ,value = TRUE) ),"hpi"] <- "1"
+dat.m[which(dat.m$Cell %in% grep("WCK5027",colnames(dat) ,value = TRUE) ),"hpi"] <- "1.5"
+dat.m[which(dat.m$Cell %in% grep("WCK5046",colnames(dat) ,value = TRUE) ),"hpi"] <- "2"
+dat.m[which(dat.m$Cell %in% grep("WCK4032",colnames(dat) ,value = TRUE) ),"hpi"] <- "4"
+dat.m[which(dat.m$Cell %in% grep("WCK0003",colnames(dat) ,value = TRUE) ),"hpi"] <- "4.5"
+dat.m[which(dat.m$Cell %in% grep("WCK0014",colnames(dat) ,value = TRUE) ),"hpi"] <- "6"
+dat.m[which(dat.m$Cell %in% grep("WCK3068",colnames(dat) ,value = TRUE) ),"hpi"] <- "8"
+dat.m[which(dat.m$Cell %in% grep("WCK0013",colnames(dat) ,value = TRUE) ),"hpi"] <- "9.5"
+dat.m[which(dat.m$Cell %in% grep("WCK4025",colnames(dat) ,value = TRUE) ),"hpi"] <- "24"
+dat.m <- dat.m[dat.m$value < 1000,] # remove wells with over 1000 viral UMIs, which could be artefacts
+dat.m$value <- log2(dat.m$value+1) # log-transform UMI counts
+dat.m <- dat.m[-which(dat.m$Cell %in% wells_control),] # remove control wells where no cell was sorted (see table S1)
+print(dim(dat.m)) # check dimensions: 5169    4
+
+## Plotting
+pdf(file=paste(work_dir,"/Fig.1B.pdf", sep = ""), width = 4.5, height = 2.7)
+ggplot(subset(dat.m, Category %in% "Viral UMIs"), aes(x = hpi, y = value)) + geom_jitter(alpha = 0.3, color = "tomato", size = 0.4) + stat_summary(fun.y=mean, colour="blue", geom="point", shape=18, size=2) + labs(title = "", y = "Viral UMIs [log2(UMI+1)]", x = "hpi") + theme_bw() + theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 0, size = 8), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + geom_hline(yintercept = log2(11), linetype = "dashed", color = "darkgreen", alpha = 0.5)
+dev.off()
+
+
+
+# Proportion of cells with at least 10 viral UMIs (Fig. 1C)
+## Prepare the dataset (Fig. 1)
+dat <- data.frame(sapply(c("Ctrl", "UV","0","1","1.5","2","4","4.5","6","8","9.5","24"),function(x) nrow(dat.m[dat.m$hpi == x & dat.m$Category == "Viral UMIs",]) ), sapply(c("Ctrl", "UV","0","1","1.5","2","4","4.5","6","8","9.5","24"),function(x) nrow(dat.m[dat.m$hpi == x & dat.m$Category == "Viral UMIs" & dat.m$value >= 3.45,]) ), sapply(c("Ctrl", "UV","0","1","1.5","2","4","4.5","6","8","9.5","24"),function(x) nrow(dat.m[dat.m$hpi == x & dat.m$Category == "Viral UMIs" & dat.m$value < 3.45,]) ) )
+dat$hpi = factor(rownames(dat), levels = c("Ctrl", "UV","0","1","1.5","2","4","4.5","6","8","9.5","24") )
+colnames(dat) = c("total","High", "Low", "hpi")
+dat$High = dat$High/dat$total
+dat$Low = dat$Low/dat$total
+
+## Plotting
+pdf(file=paste(work_dir,"/Fig.1C.pdf", sep = ""), width = 4.5, height = 1.5)
+ggplot(dat, aes(hpi, group = 1)) + geom_line(aes(y = Low), linetype = 2) + geom_line(aes(y = High)) + labs(title = "", y = "Proportion of cells") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title = element_text(size = 9), axis.text = element_text(size = 8), legend.title = element_text(size = 8), legend.text = element_text(size = 8))
+dev.off()
+
+```
+
+
+
+## 3. Scatter and contour plots of viral and host mRNA UMI counts in cells from infected culture: fig. S3
+```{r }
+# Prepare the dataset
+mat_dat <- as.data.frame(as.matrix(mat@mat))
+
+## Remove doublet and ctrl-only wells in the 8hpi plate
+dat <- mat_dat[,-which(colnames(mat_dat) %in% c(hpi8_mixed,hpi8_ctrlonly))] 
+
+## Remove cells from Ctrl and UV 
+dat <- dat[,-which(colnames(dat) %in% grep("WCK0017|WCK5060",colnames(dat) ,value = TRUE) )] # Ctrl
+dat <- dat[,-which(colnames(dat) %in% grep("WCK4033|WCK4036",colnames(dat) ,value = TRUE) )] # UV
+
+## Calculate total host/viral mRNA UMI counts
+bio_sum = colSums(dat[-grep("ERCC",rownames(dat)),])
+host_sum = colSums(dat[-grep("ERCC|AET",rownames(dat)),])
+vir_sum = colSums(dat[-grep("ERCC|comp",rownames(dat)),])
+rRNA_sum = colSums(dat[c("comp88611_c0_rev","comp92306_c1_rev","comp17002099_c0"),]) # rRNA transcripts encoded by the nulcear, plastid, and mitochondrial genomes
+hostmRNA_sum = host_sum-rRNA_sum # host mRNA UMIs
+dat_sums <- data.frame(bio_sum,vir_sum,hostmRNA_sum)
+dat_sums$Cell = rownames(dat_sums)
+
+## Remove wells with too few or too many UMIs
+dat_sums = dat_sums[dat_sums[,"bio_sum"] >= 20,] # exclude wells with fewer than 20 non-ERCC UMIs (host or viral, mRNA or rRNA)
+dim(dat_sums) #3407    4
+dat_sums = dat_sums[dat_sums[,"bio_sum"] <= 1000,] # exclude wells with more than 1000 non-ERCC UMIs, which could be artefacts 
+dim(dat_sums) #3404    4
+
+
+# plotting
+pdf(file=paste(work_dir,"/fig.S3A.pdf", sep = ""), width = 4, height = 4)
+ggplot(dat_sums, aes(x=log2(hostmRNA_sum+1), y=log2(vir_sum+1) )) + geom_point(size=1, shape=1, colour = "blue", alpha = 0.5) + geom_hline(yintercept = log2(11), linetype = "dashed", color = "darkgreen", alpha = 0.5) + labs(title = "Virus-host mRNA transcript counts", y = "Viral UMIs [log2(UMI+1)]", x = "Host UMIs [log2(UMI+1)]") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(angle = 0, size = 8), axis.text.y = element_text(angle = 0, size = 8), axis.title = element_text(size=10) ) + scale_x_continuous(limits=c(0,10)) + scale_y_continuous(limits=c(0,10))
+dev.off()
+pdf(file=paste(work_dir,"/fig.S3B.pdf", sep = ""), width = 4, height = 4)
+ggplot(dat_sums, aes(x=log2(hostmRNA_sum+1), y=log2(vir_sum+1) )) + geom_density_2d(colour = "blue", alpha = 0.5) + geom_hline(yintercept = log2(11), linetype = "dashed", color = "darkgreen", alpha = 0.5) + labs(title = "Virus-host mRNA transcript counts", y = "Viral UMIs [log2(UMI+1)]", x = "Host UMIs [log2(UMI+1)]") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(angle = 0, size = 8), axis.text.y = element_text(angle = 0, size = 8), axis.title = element_text(size=10) ) + scale_x_continuous(limits=c(0,10)) + scale_y_continuous(limits=c(0,10))
+dev.off()
+
+```
+
+
+## 4. Cliff diagrams (proportions of viral and host mRNA UMIs in cells from infected culture): Fig. 1D
+```{r}
+# Prepare the dataset
+## Add sampling times
+dat_sums$hpi <- as.factor("")
+levels(dat_sums$hpi) <- c("0","1","1.5","2","4","4.5","6","8","9.5","24")
+dat_sums[which(dat_sums$Cell %in% grep("WCK1001",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "0"
+dat_sums[which(dat_sums$Cell %in% grep("WCK5026",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "1"
+dat_sums[which(dat_sums$Cell %in% grep("WCK5027",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "1.5"
+dat_sums[which(dat_sums$Cell %in% grep("WCK5046",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "2"
+dat_sums[which(dat_sums$Cell %in% grep("WCK4032",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "4"
+dat_sums[which(dat_sums$Cell %in% grep("WCK0003",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "4.5"
+dat_sums[which(dat_sums$Cell %in% grep("WCK0014",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "6"
+dat_sums[which(dat_sums$Cell %in% hpi8_infonly),"hpi"] <- "8"
+dat_sums[which(dat_sums$Cell %in% grep("WCK0013",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "9.5"
+dat_sums[which(dat_sums$Cell %in% grep("WCK4025",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "24"
+
+## Calculate proportions of mRNA UMIs
+dat_sums$virProp = (dat_sums$vir_sum/(dat_sums$vir_sum+dat_sums$hostmRNA_sum))
+dat_sums$hostProp = (dat_sums$hostmRNA_sum/(dat_sums$vir_sum+dat_sums$hostmRNA_sum))
+
+## Order cells by host mRNA proportion
+dat_sums.r = dat_sums[sample(rownames(dat_sums)),] # first randomize the order of cells
+dat_sums.o = dat_sums.r[order(dat_sums.r$hostProp, decreasing = T),] # order by host mRNA proportion
+
+## Order cells into groups with or without viral UMIs
+dat1 = dat_sums.o[dat_sums.o$vir_sum == 0,]
+dat2 = dat_sums.o[dat_sums.o$vir_sum > 0,]
+dat_sums.o = rbind(dat1,dat2)
+dat_sums.o[grep("WCK1001",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK1001",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK5026",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK5026",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK5027",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK5027",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK5046",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK5046",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK4032",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK4032",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK0003",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK0003",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK3070",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK3070",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK0014",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK0014",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK0013",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK0013",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK4025",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK4025",rownames(dat_sums.o), value = T))
+dat_sums.o[grep("WCK3068",rownames(dat_sums.o), value = T),"CellNum"] = 1:length(grep("WCK3068",rownames(dat_sums.o), value = T))
+dat_sums.o.m <- melt(dat_sums.o, id.vars = c("Cell","CellNum","hpi"), variable.name = "Transcripts")
+
+
+# Plot stacked bar graphs
+pdf(file=paste(work_dir,"/Fig.1D.pdf", sep = ""), width = 8, height = 3)
+ggplot(subset(dat_sums.o.m, dat_sums.o.m$Transcripts %in% c("virProp","hostProp")), aes(x = CellNum, y = value)) + geom_bar(stat = "identity", aes(fill = Transcripts)) + labs(fill="mRNA source") + scale_fill_manual(values=c("#F8766D", "skyblue2")) + facet_wrap(~hpi, nrow=2, scales = 'free') + labs(title = "Cliff diagram:", y = "Proportion of UMIs", x = "Cell") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), strip.text = element_text(size=8), plot.title = element_text(size = 12), axis.title.x = element_text(size=8), axis.title.y = element_text(size=8))
+dev.off()
+
+```
+
+
+## 5. The presence of viral mRNA does not affect capture and sequencing of host mRNA: fig. S2
+```{r}
+# This part aims to compare the viral and host mRNA proportions between sequenced wells with one cell from infected culture (hpi8_infonly), sequenced wells with both one cell from infected culture and one cell from control culture (hpi8_mixed), and in silico random combinations of one sequenced well with one cell from infected culture (hpi8_infonly) and one sequenced well with one cell from control culture (sampled at 10 hpi)
+
+# Prepare the dataset
+
+## Retain the aforementioned wells
+dat <- mat_dat[,which(colnames(mat_dat) %in% c(hpi8_infonly,hpi8_mixed,grep("WCK0017",colnames(mat_dat) ,value = TRUE) ))] 
+
+## Calculate total host/viral mRNA UMI counts
+bio_sum = colSums(dat[-grep("ERCC",rownames(dat)),])
+host_sum = colSums(dat[-grep("ERCC|AET",rownames(dat)),])
+vir_sum = colSums(dat[-grep("ERCC|comp",rownames(dat)),])
+rRNA_sum = colSums(dat[c("comp88611_c0_rev","comp92306_c1_rev","comp17002099_c0"),])
+hostmRNA_sum = host_sum-rRNA_sum
+dat_sums <- data.frame(bio_sum,vir_sum,hostmRNA_sum)
+
+## Remove wells with too few or too many UMIs
+dat_sums = dat_sums[dat_sums[,"bio_sum"] >= 20,] # exclude wells with fewer than 20 non-ERCC UMIs (host or viral, mRNA or rRNA)
+dim(dat_sums) #689    3
+dat_sums = dat_sums[dat_sums[,"bio_sum"] <= 1000,] # exclude wells with more than 1000 non-ERCC UMIs, which could be artefacts 
+dim(dat_sums) #661    3
+
+## Tag wells
+dat_sums$Cell = rownames(dat_sums)
+dat_sums$hpi <- as.factor("")
+levels(dat_sums$hpi) <- c("8_inf", "8_mixed", "ctrl10hpi")
+dat_sums[which(dat_sums$Cell %in% hpi8_infonly),"hpi"] <- "8_inf"
+dat_sums[which(dat_sums$Cell %in% hpi8_mixed ),"hpi"] <- "8_mixed"
+dat_sums[which(dat_sums$Cell %in% grep("WCK0017",dat_sums$Cell ,value = TRUE) ),"hpi"] <- "ctrl10hpi"
+
+
+
+# Cliff diagrams for hpi8_infonly and hpi8_mixed (fig. S2 A and B)
+
+## Calculate proportions of mRNA UMIs
+dat_sums$virProp = (dat_sums$vir_sum/(dat_sums$vir_sum+dat_sums$hostmRNA_sum))
+dat_sums$hostProp = (dat_sums$hostmRNA_sum/(dat_sums$vir_sum+dat_sums$hostmRNA_sum))
+
+## Order cells by host mRNA proportion
+dat_sums.r = dat_sums[sample(rownames(dat_sums)),] # first randomize the order of cells
+dat_sums.o = dat_sums.r[order(dat_sums.r$hostProp, decreasing = T),] # order by host mRNA proportion
+
+## Order cells into groups with or without viral UMIs
+dat1 = dat_sums.o[dat_sums.o$vir_sum == 0,]
+dat2 = dat_sums.o[dat_sums.o$vir_sum > 0,]
+dat_sums.o = rbind(dat1,dat2)
+
+dat_sums.o <- dat_sums.o[which(dat_sums.o$Cell %in% grep("WCK3068",dat_sums.o$Cell ,value = TRUE) ),] # retain 8 hpi wells
+dat_sums.o[intersect(rownames(dat_sums.o),hpi8_mixed),"CellNum"] = 1:length(intersect(rownames(dat_sums.o),hpi8_mixed))
+dat_sums.o[intersect(rownames(dat_sums.o),hpi8_infonly), "CellNum"] = 1:length(intersect(rownames(dat_sums.o),hpi8_infonly))
+dat_sums.o.m <- melt(dat_sums.o, id.vars = c("Cell","CellNum","hpi"), variable.name = "Transcripts")
+
+## Plot stacked bar graphs
+pdf(file=paste(work_dir,"/fig.S2AB.pdf", sep = ""), width = 4, height = 1.8)
+ggplot(subset(dat_sums.o.m, dat_sums.o.m$Transcripts %in% c("virProp","hostProp")), aes(x = CellNum, y = value)) + geom_bar(stat = "identity", aes(fill = Transcripts)) + labs(fill="mRNA source") + scale_fill_manual(values=c("#F8766D", "skyblue2")) + facet_wrap(~hpi, nrow=1, scales = 'free') + labs(title = "Cliff diagram:", y = "Proportion of UMIs", x = "Cell") + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), strip.text = element_text(size=8), plot.title = element_text(size = 12), axis.title.x = element_text(size=8), axis.title.y = element_text(size=8))
+dev.off()
+
+
+
+# In silico mixing one cell from infected culture and one cell from control culture (fig. S2 C to J)
+
+## Randomly combine wells from 8hpi (wells with single cells from infected culture) and control (10hpi)
+for(i in 1:8){ # 8 replicates
+dat_inf <- dat_sums[dat_sums$hpi == "8_inf",2:3]; mat_inf <- data.matrix(dat_inf)
+dat_ctrl <- dat_sums[dat_sums$hpi == "ctrl10hpi",2:3]; mat_ctrl <- data.matrix(dat_ctrl[sample(rownames(dat_ctrl), size = dim(mat_inf)[1]),] ) # sample the same number of wells from control as from infected
+data <- data.frame(mat_inf + mat_ctrl)
+data$Cell = rownames(data)
+data$virProp = (data$vir_sum/(data$vir_sum+data$hostmRNA_sum))
+data$hostProp = (data$hostmRNA_sum/(data$vir_sum+data$hostmRNA_sum))
+
+## order by hostProtProp
+data = data[order(data$hostProp, decreasing = T),]
+data[,"CellNum"] = 1:nrow(data)
+dat_sums.o.m <- melt(data, id.vars = c("Cell","CellNum"), variable.name = "Transcripts")
+
+## plot stacked bar graphs
+p_name = paste("p", i, sep = "")
+p <- ggplot(subset(dat_sums.o.m, dat_sums.o.m$Transcripts %in% c("virProp","hostProp")), aes(x = CellNum, y = value)) + geom_bar(stat = "identity", aes(fill = Transcripts)) + labs(fill="mRNA source") + scale_fill_manual(values=c("#F8766D", "skyblue2")) + labs(title = paste("Sample", i, sep = " "), y = "Proportion of UMIs", x = "Cell") + theme_bw() + theme(legend.title = element_blank(), legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(size = 10), axis.title.x = element_text(size=8), axis.title.y = element_text(size=8))
+assign(p_name, p, envir = .GlobalEnv)
+}
+
+## Plot
+pdf(file=paste(work_dir,"/fig.S2C_J.pdf", sep = ""), width = 8, height = 4.2)
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, nrow = 2)
+dev.off()
+
+```
+
+
+## 6. MetaCell grouping and calculation of infection indices for individual cells based on viral gene expression: Fig. 2
+```{r }
+# Prepare for MetaCell package
+detach("package:metacell", unload = T) # make sure nothing is already loaded
+library(metacell)
+
+# Set up MetaCell directory
+dir.create(paste(work_dir,"/metacell_inf/", sep = ""))
+scdb_init(paste(work_dir,"/metacell_inf/", sep = ""), force_reinit=T)
+scfigs_init(paste(work_dir,"/metacell_inf/", sep = ""))
+
+# read in UMI tables
+mcell_import_multi_mars("matinf", dataset_table_fn = paste(work_dir,"/MARS_Batches_inf.txt", sep = ""), base_dir = paste(work_dir,"/processed_data_files", sep = ""), force = TRUE)
+mat = scdb_mat("matinf")
+
+# Remove ERCC and host transcripts
+ercc_host=rownames(mat@mat)[grepl("ERCC|comp",rownames(mat@mat))]
+mcell_mat_ignore_genes(new_mat_id="inf_EhV",mat_id="matinf",ig_genes=ercc_host)
+mat=scdb_mat("inf_EhV")
+
+# Remove small or suspiciously large cells/wells (in terms of viral UMI counts)
+x=colSums(as.matrix(mat@mat))
+small_cells=names(which(x<10))
+large_cells=names(which(x>1000))
+mcell_mat_ignore_cells(new_mat_id="mat_10_1000",mat_id="inf_EhV",ig_cells=c(small_cells,large_cells))
+mat=scdb_mat("mat_10_1000")
+
+# Select gene markers for metacell grouping
+mcell_add_gene_stat(gstat_id="gene_stat", mat_id="mat_10_1000", force=T) # compute gene stats
+mcell_gset_filter_multi(gstat_id="gene_stat",gset_id="clustering_markers",T_tot=20,T_top3=1,T_szcor=-0.01,T_vm=0.2,T_niche=0.05,force_new=T)
+markers_inf=scdb_gset("clustering_markers"); length(names(markers_inf@gene_set)) # 178 markers were selected
+
+# Grouping cells
+mcell_add_cgraph_from_mat_bknn(mat_id="mat_10_1000",gset_id="clustering_markers",graph_id="graph",K=100,dsamp=F) # initial graph
+mcell_coclust_from_graph_resamp(coc_id="coc",graph_id="graph",min_mc_size=80,p_resamp=0.75,n_resamp=1000) # bootstrapin
+mcell_mc_from_coclust_balanced(mat_id="mat_10_1000",coc_id="coc",mc_id="mc",K=40,min_mc_size=80,alpha=3) # final grpah
+
+
+# Metacells and 2D projection
+## create an arbitrary coloring of the metacells
+mc=scdb_mc("mc")
+mc@colors=colorRampPalette(c("darkgray", "burlywood1", "chocolate4","orange", "red", "purple", "blue","darkgoldenrod3", "cyan"))(ncol(mc@mc_fp))
+scdb_add_mc("mc",mc) #overwrite the mc object with the color definitions
+## 2d projection
+mcell_mc2d_force_knn(mc2d_id="2dproj",mc_id="mc", graph_id="graph")
+
+## Use the metacell grouping and 2d projection from the paper (MetaCell analyses can result in somewhat different grouping/projection each time)
+file.copy(paste(work_dir,"/mc.mc.Rda", sep = ""), paste(work_dir,"/metacell_inf/", sep = ""), overwrite = T) # copy the mc data to the MetaCell folder
+file.copy(paste(work_dir,"/mc2d.2dproj.Rda", sep = ""), paste(work_dir,"/metacell_inf/", sep = ""), overwrite = T) # copy the 2dproj data to the MetaCell folder
+detach("package:metacell", unload = T); library(metacell); scdb_init(paste(work_dir,"/metacell_inf/", sep = ""), force_reinit=T) # reset MetaCell package/data
+mc=scdb_mc("mc")
+mc2d = scdb_mc2d("2dproj")
+
+## Calculate infection indices (relative distance (0-1) of a cell to the upper-left most point (beginning of the infection continuum)) (Fig. 3A)
+dist = ((mc2d@sc_x - min(mc2d@sc_x))^2 + (mc2d@sc_y - max(mc2d@sc_y))^2)^0.5
+dist.norm = dist/max(dist)
+
+
+
+# Scatter plot of single cells on a gradient of infection states (Fig. 2A)
+sc_df <- data.frame(mc2d@sc_x, mc2d@sc_y); sc_df <- cbind(sc_df, as.factor(mc@mc)); colnames(sc_df) = c("X","Y", "color")
+xColor <- seq(0,1,length.out=500) # color scale for x and y, 
+yColor <- seq(0,1,length.out=500)
+x <- seq(min(mc2d@sc_x),(max(mc2d@sc_x)),length.out=500) # on respective x and y axis
+y <- seq(max(mc2d@sc_y),(min(mc2d@sc_y)),length.out=500)
+df <- cbind(expand.grid(x=xColor, y=yColor), expand.grid(x=x, y=y)) #grid for colors
+colnames(df)<-c("xColor","yColor","x","y")
+df$zColor <- (df$xColor^2+df$yColor^2)^0.5/(2)^0.5 # the color factor for radius
+mc_df <- data.frame(mc2d@mc_x,mc2d@mc_y); colnames(mc_df) = c("X","Y"); mc_df$color = as.factor(rownames(mc_df))
+pdf(file=paste(work_dir,"/Fig.2A.pdf", sep = ""))
+ggplot(sc_df, aes(X,Y)) + geom_raster(data =df, aes(x, y,fill = zColor)) + scale_fill_gradientn(colours = alpha((colorRampPalette(c("white", "yellowgreen","darkgreen"))(100)), .8)) + geom_point(data = sc_df, aes(X, Y, color = color), size = 0.4, show.legend = FALSE) + scale_color_manual(values = c("#A9A9A9", "#D8A36D", "#D88406", "#FF0000", "#6A15F4", "#88635D", "#00FFFF")) + coord_fixed(ratio = 1) + xlim(0,500) + ylim(0,450) +  geom_label(data = mc_df, aes(X, Y, label = color), position = position_stack(vjust = 0.9), label.size=NA, fill = NA, size = 5)
+dev.off()
+## The metacell numbering (1-7) is changed so that it follows the infection progression
+
+
+# Scatter plots of single cells showing their bulk sample origins (i.e., hpi) (Fig. 2B)
+sc_df <- data.frame(mc2d@sc_x, mc2d@sc_y); sc_df <- cbind(sc_df, as.factor(mc@mc)); sc_df$Sample = mat@cell_metadata$batch_set_id[rownames(sc_df)]; colnames(sc_df) = c("X","Y", "color", "Sample"); 
+levels(sc_df$Sample) = c("0 hpi","1 hpi","1.5 hpi","2 hpi","4 hpi","4.5 hpi","6 hpi (+CHX)","6 hpi","8 hpi","9.5 hpi","24 hpi") # rename samples
+sc_df$Sample = factor(sc_df$Sample, levels(sc_df$Sample)[c(1:6,8:11,7)]) # reorder samples
+sc_df1 = sc_df[,1:2] # df for background (cells from all samples)
+pdf(file=paste(work_dir,"/Fig.2B.pdf", sep = ""), width = 7, height = 5)
+ggplot(sc_df, aes(X,Y)) + geom_point(data = sc_df1, aes(X, Y), colour = "#E2E2E2", size = 0.4, show.legend = FALSE) + geom_point(data = sc_df, aes(X, Y, color = color), size = 0.4, show.legend = FALSE) + facet_wrap(~Sample, nrow=3, scales = 'free', drop = FALSE) + scale_color_manual(values = mc@colors) + scale_x_continuous(limits=c(0,500)) + scale_y_continuous(limits=c(0,450))
+dev.off()
+
+## Calculate mean and sd of infection indices for each bulk sample (Fig. 2B)
+sc_df.infind <- cbind(sc_df,dist.norm); colnames(sc_df.infind)[5] = "InfIndex"
+aggregate(sc_df.infind[, 5], list(sc_df.infind$Sample), mean)
+aggregate(sc_df.infind[, 5], list(sc_df.infind$Sample), sd)
+
+```
+
+
+
+## 7. Heatmap showing expression levels of viral genes in single cells ordered by their infection indices: Fig. 3
+```{r heatmap, echo=FALSE}
+# Prepare the data matrix
+df=data.frame(as.matrix(mat@mat))
+x=rowSums(as.matrix(mat@mat)) # mat=scdb_mat("mat_10_1000") (see above)
+df = df[!rownames(df) %in% names(which(x<20)),] # Remove genes (out of a total of 447 viral genes) that have fewer than 20 UMIs across all cells
+dim(df) # 411 2072
+df_log = log2(df+1)
+
+# reorder cells based infection indices
+df_log = df_log[,names(dist.norm[order(dist.norm)])]
+
+# Prepare viral gene annotations (presence/absence in virion proteome and functional categories) for heatmap
+A <- as.data.frame(df_log[,1]); A[,1] = 0; rownames(A) = rownames(df_log)
+A[rownames(proteome),1] = 1; colnames(A) = "virion proteome"
+B <- A
+for (i in 1:nrow(virusGeneCategories)) {
+  B[rownames(virusGeneCategories)[i],virusGeneCategories[i,1]] = 1
+}
+B[is.na(B)] <- 0
+
+# Color scheme for heatmap
+col.pal <- colorRampPalette(c("white", "pink","orangered","red", "purple", "blueviolet", "blue", "blue3", "navy", "navyblue", "black"))(100)
+
+# Preliminary heatmap with hierarchical clustering of viral genes based on their expression profiles across single cells
+hm.parameters <- list(df_log, 
+  color = col.pal, breaks = NA,
+  cellwidth = 0.4, cellheight = 1.1, scale = "none",
+  border_color = NA,
+  fontsize = 6.5,
+  fontsize_row = 1,
+  fontsize_col = 1,
+  treeheight_row = 60,
+  kmeans_k = NA,
+  show_rownames = T, show_colnames = T,
+  legend = T, legend_labels = "label",
+  clustering_method = "average",
+  cluster_rows = T, cluster_cols = F,
+  clustering_distance_rows = "correlation")
+do.call("pheatmap", c(hm.parameters, filename=paste(work_dir,"/prelimHM.pdf", sep = "")))
+df_log.corr_avg_hclust <- do.call("pheatmap", hm.parameters) # save the heatmap, including the viral gene clustering, as an object
+
+# Swap branches in the hierarchical clustering tree of the viral genes to tidy it up
+mytree <- as.phylo(df_log.corr_avg_hclust$tree_row)
+write.tree(phy=mytree, file=paste(work_dir,"/viralgenes.corr_avg_hclust.newick", sep = ""))
+## Edit the tree by swapping branches using archaeopteryx (or other tree editing programs). The edited tree, as shown in Fig. 3B, is in the folder.
+myDendro <- as.hclust.phylo(read.tree(file = paste(work_dir,"/viralgenes.corr_avg_hclust.reorder.newick", sep = "")))
+df_log = df_log[myDendro$labels,]
+
+# Plot heatmap
+hm.parameters <- list(df_log,
+  color = col.pal, breaks = NA,
+  cellwidth = 0.35, cellheight = 1.1, scale = "none",
+  border_color = NA,
+  fontsize = 6.5,
+  fontsize_row = 1,
+  fontsize_col = 1,
+  treeheight_row = 70,
+  kmeans_k = NA,
+  show_rownames = T, show_colnames = T,
+  annotation_row = B,
+  legend = T, legend_labels = "label",
+  cluster_rows = myDendro, cluster_cols = F)
+# To draw to file 
+do.call("pheatmap", c(hm.parameters, filename=paste(work_dir,"/Fig.3BC.pdf", sep = "")))  # Fig. 3 B and C
+
+
+# Distribution of infection states  (Fig. 3A)
+StateDistribution <- data.frame(matrix(0, nrow = 11, ncol = ncol(df_log))); colnames(StateDistribution) = colnames(df_log)
+rownames(StateDistribution) = c("0", "1", "1.5", "2", "4", "4.5", "6", "8", "9.5", "24", "6 (+CHX)")
+StateDistribution["0",grep("WCK1001", colnames(df_log))] = 1
+StateDistribution["1",grep("WCK5026", colnames(df_log))] = 1
+StateDistribution["1.5",grep("WCK5027", colnames(df_log))] = 1
+StateDistribution["2",grep("WCK5046", colnames(df_log))] = 1
+StateDistribution["4",grep("WCK4032", colnames(df_log))] = 1
+StateDistribution["4.5",grep("WCK0003", colnames(df_log))] = 1
+StateDistribution["6",grep("WCK0014", colnames(df_log))] = 1
+StateDistribution["8",grep("WCK3068", colnames(df_log))] = 1
+StateDistribution["9.5",grep("WCK0013", colnames(df_log))] = 1
+StateDistribution["24",grep("WCK4025", colnames(df_log))] = 1
+StateDistribution["6 (+CHX)",grep("WCK3070", colnames(df_log))] = 1
+StateDistribution = rbind(dist.norm[order(dist.norm)], StateDistribution); rownames(StateDistribution) = c("Infection states","0", "1", "1.5", "2", "4", "4.5", "6", "8", "9.5", "24", "6 (+CHX)")
+
+annotation_col <- sc_df; annotation_col[,c(1:2,4)] = {}; colnames(annotation_col) = "Metacells" # Add column annotations for MetaCell assignments
+hm.parameters <- list(StateDistribution, 
+  color = colorRampPalette(c("white", "yellowgreen","darkgreen"))(100), breaks = NA,
+  cellwidth = 0.1, cellheight = 3.4, scale = "none",
+  border_color = NA,
+  fontsize = 2,
+  fontsize_row = 4,
+  fontsize_col = 1,
+  kmeans_k = NA,
+  annotation_col = annotation_col,
+  annotation_colors = list(Metacells = c("1" = "#A9A9A9", "2" = "#D8A36D", "3"="#D88406", "4"="#FF0000", "5"="#6A15F4", "6"="#88635D", "7"="#00FFFF")),
+  show_rownames = T, show_colnames = F,
+  legend = T, legend_labels = "label", 
+  cluster_rows = F, cluster_cols = F)
+do.call("pheatmap", c(hm.parameters, filename=paste(work_dir,"/Fig.3A.pdf", sep = "")))
+
+```
+
+
+
+## 8. Heatmap showing expression levels of host mRNA transcripts in different categories/metacells: Fig. 5A
+```{r heatmap/hclust, echo=FALSE}
+# Prepare the dataset
+detach("package:metacell", unload = T) # make sure nothing is already loaded
+library(metacell)
+scdb_init(paste(work_dir,"/metacell/", sep = ""), force_reinit=T) # no CHX-pretreated cells are included
+
+# Remove ERCC RNA and viral and rRNA transcripts
+ercc_vir_rRNA=rownames(scdb_mat("mat")@mat)[grepl("ERCC|AET|comp88611_c0|comp92306_c1|comp17002099_c0",rownames(scdb_mat("mat")@mat))]
+mcell_mat_ignore_genes(new_mat_id="mat_host",mat_id="mat",ig_genes=ercc_vir_rRNA)
+# Remove host mRNA transcripts with fewer than 100 UMIs across all cells
+x=rowSums(as.matrix(scdb_mat("mat_host")@mat))
+lowly_expressed=names(x)[x<100] 
+mcell_mat_ignore_genes(new_mat_id="mat_host_100",mat_id="mat",ig_genes=c(lowly_expressed,ercc_vir_rRNA))
+df=data.frame(as.matrix(scdb_mat("mat_host_100")@mat))
+dim(df) #720  5376
+# Remove 8hpi doublet/ctrl wells
+df <- df[,-which(colnames(df) %in% c(hpi8_ctrlonly,hpi8_mixed))] 
+
+# Categories: control, UV, infected low (< 10 viral UMIs), infected high (metacells)
+ctrl = rowMeans(df[,grep("WCK0017|WCK5060", colnames(df))])
+UV = rowMeans(df[,grep("WCK4033|WCK4036", colnames(df))])
+low = rowMeans(df[,setdiff(grep("WCK1001|WCK5026|WCK5027|WCK5046|WCK4032|WCK0003|WCK0014|WCK3068|WCK0013|WCK4025", colnames(df), value = TRUE), names(mc@mc))]) # 1914 cells
+
+# Metacell grouping (note metacell numbering in Fig. 2 is different from that in the original output)
+mc1 = rowMeans(df[,colnames(df) %in% names(mc@mc)[mc@mc == 6]]) # 125 cells
+mc2 = rowMeans(df[,colnames(df) %in% names(mc@mc)[mc@mc == 7]]) # 292 cells
+mc3 = rowMeans(df[,colnames(df) %in% names(mc@mc)[mc@mc == 5]]) # 176 cells
+mc4 = rowMeans(df[,colnames(df) %in% names(mc@mc)[mc@mc == 4]]) # 164 cells
+mc5 = rowMeans(df[,colnames(df) %in% names(mc@mc)[mc@mc == 1]]) # 235 cells
+mc67 = rowMeans(df[,colnames(df) %in% names(mc@mc)[mc@mc == 2 | mc@mc == 3]]) # 744 cells
+
+# Combine and normalize
+bulk = cbind(ctrl,UV,low,mc1,mc2,mc3,mc4,mc5,mc67)
+colnames(bulk)[1:9] <- c("Control", "UV", "Infected\nviral UMIs < 10", "mc 1", "mc 2", "mc 3", "mc 4", "mc 5", "mc 6 and 7")
+df.n = (bulk / rowSums(bulk))*100 # Normalize for the sum of each row (transcript) to be 100
+
+# Annotations of chloroplat and mitochondrial transcripts
+annot_cpmt <- data.frame(df.n[,1:2]); colnames(annot_cpmt) = c("cp","mt")
+annot_cpmt$cp = 0; annot_cpmt[as.vector(cp_transcripts[[1]]),"cp"] = 1
+annot_cpmt$mt = 0; annot_cpmt[as.vector(mt_transcripts[[1]]),"mt"] = 1
+
+# Heatmap color palet
+col.pal <- colorRampPalette(c("white", "pink","orangered","red", "purple", "blueviolet", "blue", "blue3", "navy", "navyblue", "black"))(50) ; 
+
+# Plot initail heatmap
+hm.parameters <- list(df.n, 
+  color = col.pal,
+  cellwidth = 17, cellheight = 0.3, scale = "none",
+  border_color = NA,
+  fontsize = 8,
+  fontsize_row = 2,
+  fontsize_col = 8,
+  treeheight_row = 30,
+  treeheight_col = 30,
+  show_rownames = T, show_colnames = T,
+  annotation_row = annot_cpmt,
+  legend = T, legend_labels = "label",
+  clustering_method = "average",
+  cluster_rows = T, cluster_cols = F,
+  clustering_distance_rows = "correlation")
+host.corr_avg_hclust.clust <- do.call("pheatmap", hm.parameters)
+
+# Reorder transcripts based on hierarchical clustering
+mytree <- as.phylo(host.corr_avg_hclust.clust$tree_row)
+myDendro.host.ladderized <- ladderize(mytree, right = FALSE)
+write.tree(phy=myDendro.host.ladderized, file=paste(work_dir,"/host.corr_avg_hclust.clust.ladderized.newick", sep = ""))
+myDendro.host.ladderized.phylo <- as.hclust.phylo(read.tree(file = paste(work_dir,"/host.corr_avg_hclust.clust.ladderized.newick", sep = "")))
+df.n.1 = df.n[myDendro.host.ladderized.phylo$labels,]
+
+# Plot heatmap
+hm.parameters <- list(df.n.1, 
+  color = col.pal,
+  cellwidth = 17, cellheight = 0.3, scale = "none",
+  border_color = NA,
+  fontsize = 8,
+  fontsize_row = 0.7,
+  fontsize_col = 8,
+  treeheight_row = 30,
+  treeheight_col = 30,
+  show_rownames = T, show_colnames = F,
+  annotation_row = annot_cpmt,
+  legend = T, legend_labels = "label",
+  clustering_method = "average",
+  cluster_rows = myDendro.host.ladderized.phylo, cluster_cols = F)
+do.call("pheatmap", c(hm.parameters, filename=paste(work_dir,"/Fig.5A.pdf", sep = "")))
+
+```
+
+
+## 9. Expression profiles of organelle- and nucleus-encoded transcripts in sliding windows of cells [Fig. 5B and 5C, fig. S6]
+```{r}
+# Prepare the dataset
+df=data.frame(as.matrix(scdb_mat("mat_host")@mat))
+dim(df) #92884  5376
+## retain organellar transcripts
+df_org = df[which(rownames(df) %in% c(as.vector(cp_transcripts[[1]]),as.vector(mt_transcripts[[1]]))),]
+df_org = df_org[-which(rownames(df_org) %in% c("comp17003280_c0","comp92389_c0","comp92410_c1_rev","comp92417_c2_rev","comp92315_c0_rev","comp92186_c0")),] # remove cp transcripts apparently in wrong directions
+## retain cells with ≥ 10 viral UMIs in the order of infection states
+cells <- names(dist.norm[order(dist.norm)]) 
+cells <- cells[-grep("3070",cells)] # without CHX-treated cells
+cells <- setdiff(cells,c(hpi8_ctrlonly,hpi8_mixed)) # remove 8hpi doublet/ctrl wells
+df_org = df_org[,cells]
+## filter genes with < 20 total UMIs across all cells
+df_org = df_org[!rownames(df_org) %in% names(which(rowSums(df_org)< 20)),]
+dim(df_org) # 20 1734
+
+# Calculate sliding windows
+wind = 50; step = 10 # wind: window size; step: step size
+df_org.s <- as.data.frame(t(apply(df_org,1,function(x) rollapply(x,width = wind, by=step, FUN = mean, align = "left")))) 
+
+# Convert transcript IDs to gene names
+mtcp.transcripts.names <- read.delim(paste(work_dir,"/mtcp.transcripts_names.txt", sep = ""), as.is = TRUE, header = T, sep = "\t", row.names = 1) # organellar origin and detailed lists of genes in each polycistronic transcript can be also found in mtcp.transcripts_names.txt
+rownames(df_org.s) = mtcp.transcripts.names[rownames(df_org.s),1]
+
+# Color palet
+col.pal <- colorRampPalette(c("white", "pink","hotpink","orangered","red", "purple", "blueviolet", "blue", "blue2","blue3", "navy", "navyblue", "black"))(100);
+
+# Initial heatmap
+hm.parameters <- list(df_org.s, 
+  color = col.pal,
+  cellwidth = 0.5, cellheight = 6, scale = "none",
+  border_color = NA,
+  fontsize = 6,
+  fontsize_row = 6,
+  treeheight_row = 40,
+  show_rownames = T, show_colnames = F,
+  legend = T, legend_labels = "label",
+  clustering_method = "average",
+  cluster_rows = T, cluster_cols = F,
+  clustering_distance_rows = "correlation")
+df_org.slidewindow.corr_avg_hclust <- do.call("pheatmap", hm.parameters)
+
+# Ladderize the transcript tree (hierarchical clustering)
+mytree <- as.phylo(df_org.slidewindow.corr_avg_hclust$tree_row); mtcp.slidewindow.hclust.ladderized <- ladderize(mytree, right = FALSE)
+write.tree(phy=mtcp.slidewindow.hclust.ladderized, file=paste(work_dir,"/mtcp.slidewindow.hclust.ladderized.newick", sep = ""))
+mtcp.slidewindow.hclust.ladderized <- as.hclust.phylo(read.tree(file = paste(work_dir,"/mtcp.slidewindow.hclust.ladderized.newick", sep = ""))); file.remove(paste(work_dir,"/mtcp.slidewindow.hclust.ladderized.newick", sep = ""))
+df_org.s = df_org.s[mtcp.slidewindow.hclust.ladderized$labels,]
+
+# Plot heatmap
+hm.parameters <- list(df_org.s, 
+  color = col.pal,
+  cellwidth = 1.3, cellheight = 6, scale = "none",
+  border_color = NA,
+  fontsize = 6,
+  fontsize_row = 5,
+  fontsize_col = 6,
+  treeheight_row = 30,
+  show_rownames = T, show_colnames = F,
+  legend = T, legend_labels = "label",
+  clustering_method = "average",
+  cluster_rows = mtcp.slidewindow.hclust.ladderized, cluster_cols = F,
+  clustering_distance_rows = "correlation")
+do.call("pheatmap", c(hm.parameters, filename=paste(work_dir,"/Fig.5B.pdf", sep = "")))
+
+# Sliding windows of infection states 
+InfStates = df_org; InfStates["InfectionStates",] = dist.norm[colnames(InfStates)]
+InfStates.s <- as.data.frame(t(apply(InfStates,1,function(x) rollapply(x,width = wind, by=step, FUN = mean, align = "left")))) 
+InfStates.s <- InfStates.s[-20:-1,]
+hm.parameters <- list(InfStates.s, 
+  color = colorRampPalette(c("white", "yellowgreen","darkgreen"))(100), breaks = NA,
+  cellwidth = 1.3, cellheight = 6, scale = "none",
+  border_color = NA,
+  fontsize = 2,
+  fontsize_row = 5,
+  kmeans_k = NA,
+  show_rownames = T, show_colnames = F,
+  legend = T, legend_labels = "label", 
+  cluster_rows = F, cluster_cols = F)
+do.call("pheatmap", c(hm.parameters, filename=paste(work_dir,"/Fig.5B_infstates.pdf", sep = "")))
+
+
+
+
+
+
+# Line plot showing overall nuclear/mitochondrial/plastid mRNA and rRNA
+df=data.frame(as.matrix(scdb_mat("mat_host_100")@mat[,colnames(df_org)]))
+mt <- as.character(mt_transcripts$V1); cp <- as.character(cp_transcripts$V1)
+df_sum <- rbind(colSums(df[-which(rownames(df) %in% c(mt, cp)),])/dim(df[-which(rownames(df) %in% c(mt, cp)),])[1], colSums(df[which(rownames(df) %in% mt),])/length(which(rownames(df) %in% mt)), colSums(df[which(rownames(df) %in% cp),])/length(which(rownames(df) %in% cp)), data.frame(as.matrix(scdb_mat("mat")@mat[c("comp88611_c0_rev","comp17002099_c0","comp92306_c1_rev"),colnames(df_org)])) ) # calculate UMI per transcript for nuc/mito/plastid mRNA
+rownames(df_sum) = c("nuclear mRNA", "mitochondrial mRNA", "plastid mRNA", "nuclear rRNA", "mitochondrial rRNA","plastid rRNA")
+df_sum.s <- as.data.frame(t(apply(df_sum,1,function(x) rollapply(x,width = wind, by=step, FUN = mean, align = "left")))) # sliding windows (wind, step)
+
+# Plotting
+df_sum.s = as.data.frame(t(df_sum.s))
+df_sum.s$windows = as.numeric(sub("V","",rownames(df_sum.s)))
+df_sum.s.m <- melt(df_sum.s, id = "windows")
+colnames(df_sum.s.m)[2] = "Category"
+## Plot nuc/mito/plastid mRNA (Fig. 5C)
+mRNA_sum.s.m <- df_sum.s.m[grep("mRNA", df_sum.s.m$Category),]
+pdf(file=paste(work_dir,"/Fig.5C.pdf", sep = ""), width = 5, height = 1.8)
+ggplot(mRNA_sum.s.m, aes(x = windows, y = value, colour = Category, alpha = 0.9)) + geom_line() + scale_colour_manual(values=c("black", "deepskyblue", "forestgreen")) + labs(title = "Transcript abundance during infection progression", y = "Average UMI count", x = "Sliding windows of cells") + theme_bw() + scale_x_continuous(expand = c(0, 0)) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.y=element_text(size = 6), axis.text.x=element_blank(), axis.ticks.x=element_blank(), strip.background = element_blank(), strip.text.x = element_blank(), plot.title = element_text(size = 8), axis.title.x = element_text(size=8), axis.title.y = element_text(size=8), legend.text=element_text(size=6), legend.title = element_text(size = 6)) + guides(alpha = 'none')
+dev.off()
+## Plot nuc/mito/plastid rRNA (fig. S6)
+rRNA_sum.s.m <- df_sum.s.m[grep("rRNA", df_sum.s.m$Category),]
+pdf(file=paste(work_dir,"/fig.S6.pdf", sep = ""), width = 5, height = 1.8)
+ggplot(rRNA_sum.s.m, aes(x = windows, y = value, colour = Category, alpha = 0.9)) + geom_line() + scale_colour_manual(values=c("black", "deepskyblue", "forestgreen")) + labs(title = "Transcript abundance during infection progression", y = "Average UMI count", x = "Sliding windows of cells") + theme_bw() + scale_x_continuous(expand = c(0, 0)) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.y=element_text(size = 6), axis.text.x=element_blank(), axis.ticks.x=element_blank(), strip.background = element_blank(), strip.text.x = element_blank(), plot.title = element_text(size = 8), axis.title.x = element_text(size=8), axis.title.y = element_text(size=8), legend.text=element_text(size=6), legend.title = element_text(size = 6)) + guides(alpha = 'none')
+dev.off()
+
+```

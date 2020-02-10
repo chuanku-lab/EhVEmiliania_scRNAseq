@@ -1,0 +1,16 @@
+Amp.Batch.ID	Seq.Batch.ID	Batch.Set.ID	dataset	color
+0hpiA	0hpiA	inf0hpi	Ehux	darkgreen
+0hpiB	0hpiB	inf0hpi	Ehux	darkgreen
+1hpi	1hpi	inf1hpi	Ehux	darkgreen
+1.5hpi	1.5hpi	inf1.5hpi	Ehux	darkgreen
+2hpi	2hpi	inf2hpi	Ehux	darkgreen
+4hpi	4hpi	inf4hpi	Ehux	darkgreen
+4.5hpiA	4.5hpiA	inf4.5hpi	Ehux	darkgreen
+4.5hpiB	4.5hpiB	inf4.5hpi	Ehux	darkgreen
+CHX6hpi	CHX6hpi	CHX6hpi	Ehux	darkgreen
+6hpiA	6hpiA	inf6hpi	Ehux	darkgreen
+6hpiB	6hpiB	inf6hpi	Ehux	darkgreen
+8hpi	8hpi	inf8hpi	Ehux	darkgreen
+9.5hpiA	9.5hpiA	inf9.5hpi	Ehux	darkgreen
+9.5hpiB	9.5hpiB	inf9.5hpi	Ehux	darkgreen
+24hpi	24hpi	inf24hpi	Ehux	darkgreen
