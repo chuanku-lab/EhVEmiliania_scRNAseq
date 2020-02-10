@@ -407,7 +407,7 @@ aggregate(sc_df.infind[, 5], list(sc_df.infind$Sample), sd)
 
 
 ## 7. Heatmap showing expression levels of viral genes in single cells ordered by their infection indices: Fig. 3
-```{r heatmap, echo=FALSE}
+```{r }
 # Prepare the data matrix
 df=data.frame(as.matrix(mat@mat))
 x=rowSums(as.matrix(mat@mat)) # mat=scdb_mat("mat_10_1000") (see above)
@@ -445,7 +445,6 @@ hm.parameters <- list(df_log,
   clustering_method = "average",
   cluster_rows = T, cluster_cols = F,
   clustering_distance_rows = "correlation")
-do.call("pheatmap", c(hm.parameters, filename=paste(work_dir,"/prelimHM.pdf", sep = "")))
 df_log.corr_avg_hclust <- do.call("pheatmap", hm.parameters) # save the heatmap, including the viral gene clustering, as an object
 
 # Swap branches in the hierarchical clustering tree of the viral genes to tidy it up
@@ -510,7 +509,7 @@ do.call("pheatmap", c(hm.parameters, filename=paste(work_dir,"/Fig.3A.pdf", sep 
 
 
 ## 8. Heatmap showing expression levels of host mRNA transcripts in different categories/metacells: Fig. 5A
-```{r heatmap/hclust, echo=FALSE}
+```{r }
 # Prepare the dataset
 detach("package:metacell", unload = T) # make sure nothing is already loaded
 library(metacell)
